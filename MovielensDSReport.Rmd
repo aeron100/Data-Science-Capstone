@@ -1,0 +1,201 @@
+---
+title:"MovieLens Data Science Project" 
+author:"Aeron Zentner" 
+date:"March 28 2020"
+output:pdf_document:default
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+## Introduction
+
+As industries transform and evolve from sitting in the stands viewing information (looking at information or knowing that it exists) to applying relevant and reliable knowledge on the stage of innovation and change, data science and machine learning techniques play an integral role to facilitating this transition.
+
+In recent years, consumer preference data has been highly influential on society as it has shown to impact investment behaviors, which has reflected in the success and failure of many organization, entrepreneurs, and social figures. A clear example of this situation would be the affect that film review websites (e.g., IMBD, Rotten Tomatoes, Fandango, and Google Reviews) have impacted the film industry’s box office and associated revenues. These rating data blended with consumer reviews have birthed algorithmic recommendation systems, which are applied across various streaming media platforms (e.g., Netflix, Hulu, Disney+, YouTube, Amazon Prime) and thus serve as an avenue for organizations, entrepreneurs, and social figures to understand consumer preferences and strategize to gain competitive advantage. 
+
+The following data study was conducted to provide a surface-level understanding the various factors associated with film rating and provide a baseline recommendation for projecting future ratings.  
+
+## Setting and Data Preparation
+
+The study utilized a public dataset of film rating, titled MovieLens. The big data file contained over 10 million film rating for more than 9,000 film across the 1930s into the 2000s. The data for the study included the factors of film id number, film title, film release year, film genre, and film rating, which used a five-point scale (1 being the lowest or poor quality rating and 5 being the highest or top quality rating). 
+
+Following data modeling protocol, the dataset should be partitioned into two datasets. One dataset, which is a smaller subset of the whole dataset is used to build and train the data model. Once the data model is trained, it is tested against the second partitioned dataset for validation. For the purposes of this study, the MovieLens dataset was parsed into a 10/90 structure with 10% of the data being used for training and 90% of the data being used for model validation testing. 
+```{r}
+#Project setup#
+library(tidyverse)
+library(dplyr)
+library(DescTools)
+library(caret)
+library(data.table)
+
+# Obtain the dataset http://files.grouplens.org/datasets/movielens/ml-10m.zip
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Set training data at 10%
+set.seed(1, sample.kind="Rounding")
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx dateset
+validation <- temp %>% 
+    semi_join(edx, by = "movieId") %>%
+    semi_join(edx, by = "userId")
+
+#Add rows removed from validation set back into edx datset
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+## Descriptive Data
+
+Prior to model development, descriptive statistics were conducted to better understand the data and distribution of the variables. The first assessment of the data was conducted by calculating the overall summary statistics of the training dataset. 
+```{r pressure, echo=FALSE}
+#Calulate the overall summary statistics for the edx dataset 
+summary(edx)
+```
+In addtion, the mean and standard deviation was calulated for the film rating data.
+```{r}
+# Calculate the mean rating on the training dataset
+mu <- mean(edx$rating)
+mu
+```
+```{r}
+
+# Calculated the standard deviation rating on the training dataset
+stdev <- sd(edx$rating)
+stdev
+```
+```{r}
+# Calulate the  frequency and create a visual representation of the distribution of movie ratings 
+edx %>% 
+    count(movieId) %>% 
+    ggplot(aes(n)) + 
+    geom_histogram(bins = 30, color = "blue") + 
+    scale_x_log10() + 
+    ggtitle("Movies Rating Frequency")
+```
+```{r}
+```
+
+## Model Framework
+The first iteration of teh model used the ovreall average to estimate the unknown ratings. For this appraoch the mean mean of the training dataset was used to calculate Root Mean Square Error.
+```{r}
+# Use the mean of the training dataset to RMSE to predict unknown ratings
+RMSE(validation$rating, mu)
+```
+```{r}
+# I created and added the average ranking term, called meanrank
+meanrank <- edx %>%
+    group_by(movieId) %>%
+    summarize(meanrank = mean(rating - mu))
+ 
+# I used mu and meanrank to predict all unknown ratings 
+predicted_ratings <- validation %>% 
+    left_join(meanrank, by='movieId') %>%
+    mutate(pred = mu + meanrank) %>%
+    pull(pred) 
+```
+An average rating was developed and used to predict the unknown ratings. The MeanRate model was tested for validity to measure the effect.
+```{r}
+# Calculate the RMSE of movie ranking effect
+RMSE(validation$rating, predicted_ratings)
+```
+```{r}
+```
+A visual representation of the of the MeanRate model distribution was produced.
+```{r}
+# Create a visual representation of the meanrank distribution
+qplot(meanrank, data = meanrank, bins = 15, color = I("blue"))
+```
+```{r}
+```
+To strengthen the validity of the model, user bias was introduced as an additional factor to influence the model output.
+```{r}
+# Create and add the term to represent user bias, called userbias
+userbias <- edx %>% 
+    left_join(meanrank, by='movieId') %>%
+    group_by(userId) %>%
+    summarize(userbias = mean(rating - mu - meanrank))
+
+# Use the new variables to predict ratings which include meanrank and userbias
+yhat_ratings <- validation %>% 
+    left_join(meanrank, by='movieId') %>%
+    left_join(userbias, by='userId') %>%
+    mutate(pred = mu + meanrank + userbias) %>%
+    pull(pred)
+```
+The MeanRate and UserBias model was tested for validity to measure the effect.
+```{r}
+RMSE(yhat_ratings, validation$rating)
+```
+```{r}
+```
+To enhance the model and reduce the effect of the errors, regularization was used to reduce overfitting related to outliers and other data anomalies. A visual representation using a quick plot of the Root Mean Square Error and lambdas.
+```{r}
+# Calculate the optimal lambda from a sequence
+lambdas <- seq(from=0, to=10, by=0.25)
+
+# Calculate the RMSE of each lambda and repeated the earlier model development steps and included regularization for the various factors of the model
+rmses <- sapply(lambdas, function(l){
+    mu <- mean(edx$rating)
+    meanrank <- edx %>% 
+        group_by(movieId) %>%
+        summarize(meanrank = sum(rating - mu)/(n()+l))
+    userbias <- edx %>% 
+        left_join(meanrank, by="movieId") %>%
+        group_by(userId) %>%
+        summarize(userbias = sum(rating - meanrank - mu)/(n()+l))
+    yhat_ratings <- validation %>% 
+        left_join(meanrank, by = "movieId") %>%
+        left_join(userbias, by = "userId") %>%
+        mutate(pred = mu + meanrank + userbias) %>%
+        pull(pred)
+    return(RMSE(yhat_ratings, validation$rating))
+})
+# Create a visual representation using a quick plot of the Root Mean Square Error and lambdas
+qplot(lambdas, rmses)
+```
+
+## Finalized Model
+Once regularization was accounted for, the final data model was develoepd and tested. The results were a decrease in the Root Mean Square Error which yielded a more accruate prediction of future film ratings.
+```{r}
+# The finalized the linear model by the minimizing lambda
+lam <- lambdas[which.min(rmses)]
+ 
+meanrank <- edx %>% 
+    group_by(movieId) %>%
+    summarize(meanrank = sum(rating - mu)/(n()+lam))
+userbias <- edx %>% 
+    left_join(meanrank, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(userbias = sum(rating - meanrank - mu)/(n()+lam))
+
+yhat_ratings <- validation %>% 
+     left_join(meanrank, by = "movieId") %>%
+     left_join(userbias, by = "userId") %>%
+     mutate(pred = mu + meanrank + userbias) %>%
+     pull(pred)
+
+#The final model output Root Mean Square Error of the model predictions
+RMSE(yhat_ratings, validation$rating)
+```
+## Conclusion
+The study found that using data science techniques made significant improvements on the data model effectiveness. In summary, the subset of the MovieLens dataset was effectively modeled and trained to produce a baseline for accurate predictions for future film ratings. The final model shows that there were incremental enhancements to the data model as new concepts were introduced, which reflected a decrease in the Root Mean Square Error.  
+
+Model 1. Mean (mu) had RMSE of 1.061202
+Model 2. MeanRate had RMSE of 0.9439087
+Model 3. MeanRate an UserBias has an RMSE of 0.8653488
+Model 4. MeanRate an UserBias has an RMSE of 0.864817
+
+Therefore, the data model continued to improve as the variety of factors were being accounted for and included. Future analysis should be conducted with a recommendation to parse data by film year and genre type to best determine how genre or timeframe influences film ratings.
